@@ -19,10 +19,9 @@ use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
 use lazy_static::*;
 use switch::__switch;
-pub use task::{TaskControlBlock, TaskStatus};
-
+pub use task::{TaskControlBlock, TaskStatus,TaskTime};
 pub use context::TaskContext;
-
+use crate::timer::{get_time_ms,get_time_us};
 /// The task manager, where all the tasks are managed.
 ///
 /// Functions implemented on `TaskManager` deals with all task state transitions
@@ -36,7 +35,7 @@ pub struct TaskManager {
     /// total number of tasks
     num_app: usize,
     /// use inner value to get mutable access
-    inner: UPSafeCell<TaskManagerInner>,
+    pub inner: UPSafeCell<TaskManagerInner>,
 }
 
 /// Inner of Task Manager
@@ -54,6 +53,7 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            task_time: TaskTime::new(),
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -71,6 +71,7 @@ lazy_static! {
     };
 }
 
+
 impl TaskManager {
     /// Run the first task in task list.
     ///
@@ -80,6 +81,7 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let task0 = &mut inner.tasks[0];
         task0.task_status = TaskStatus::Running;
+        task0.task_time.start_time = get_time_ms(); // Set start time at task start
         let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -122,6 +124,10 @@ impl TaskManager {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
+            if inner.tasks[next].task_time.start_time == 0 {
+                inner.tasks[next].task_time.start_time = get_time_ms();
+            }
+            // inner.tasks[next].task_time.start_time = get_time_ms();// Reset start time at each switch
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
@@ -135,6 +141,27 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+    pub fn get_current_task(&self) -> usize {
+        self.inner.exclusive_access().current_task
+    }
+    
+    pub fn get_task_status(&self)-> TaskStatus{
+        let  inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let status = inner.tasks[current].task_status;
+        return status;
+    }
+    pub fn syscall_times(&self,syscall_id: usize){
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_time.syscall_time[syscall_id]+=1;
+    }
+    pub fn get_task_time(&self,id:usize)->TaskTime{
+        let inner = self.inner.exclusive_access();
+        let task = inner.tasks[id];
+        task.task_time
+    }
+    
 }
 
 /// Run the first task in task list.
@@ -168,4 +195,11 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+pub fn get_current_task() {
+    TASK_MANAGER.get_current_task();
+}
+pub fn get_task_status() {
+    TASK_MANAGER.get_task_status();
 }
