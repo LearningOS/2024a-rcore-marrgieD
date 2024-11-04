@@ -2,8 +2,10 @@
 use crate::{
     config::MAX_SYSCALL_NUM,
     task::{
-        change_program_brk, exit_current_and_run_next, suspend_current_and_run_next, TaskStatus,
+        self,change_program_brk, exit_current_and_run_next,current_user_token, suspend_current_and_run_next, TaskStatus,TASK_MANAGER
     },
+    mm::translate,
+    timer::{get_time_ms, get_time_us}
 };
 
 #[repr(C)]
@@ -43,7 +45,17 @@ pub fn sys_yield() -> isize {
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
 pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
     trace!("kernel: sys_get_time");
-    -1
+    let ts = unsafe {
+        translate(current_user_token(), _ts)
+      };
+      let us = get_time_us();
+      unsafe {
+          *ts = TimeVal {
+              sec: us / 1_000_000,
+              usec: us % 1_000_000,
+          };
+      }
+      0
 }
 
 /// YOUR JOB: Finish sys_task_info to pass testcases
@@ -51,19 +63,30 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
 /// HINT: What if [`TaskInfo`] is splitted by two pages ?
 pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
     trace!("kernel: sys_task_info NOT IMPLEMENTED YET!");
-    -1
+    let cur = TASK_MANAGER.get_current_time();
+    let ti = unsafe {
+      translate(current_user_token(), _ti)
+    };
+    unsafe {
+        *ti = TaskInfo {
+            status: TASK_MANAGER.get_current_status(),
+            syscall_times: (*cur).syscall_times,
+            time: get_time_ms() - (*cur).start_time,
+        };
+    }
+    0
 }
 
 // YOUR JOB: Implement mmap.
 pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
     trace!("kernel: sys_mmap NOT IMPLEMENTED YET!");
-    -1
+    task::sys_mmap(_start, _len, _port)
 }
 
 // YOUR JOB: Implement munmap.
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
     trace!("kernel: sys_munmap NOT IMPLEMENTED YET!");
-    -1
+    task::sys_unmap(_start, _len)
 }
 /// change data segment size
 pub fn sys_sbrk(size: i32) -> isize {

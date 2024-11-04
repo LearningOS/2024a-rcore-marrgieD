@@ -1,6 +1,6 @@
 //! Types related to task management
 use super::TaskContext;
-use crate::config::TRAP_CONTEXT_BASE;
+use crate::config::{MAX_SYSCALL_NUM, TRAP_CONTEXT_BASE};
 use crate::mm::{
     kernel_stack_position, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE,
 };
@@ -28,6 +28,31 @@ pub struct TaskControlBlock {
 
     /// Program break
     pub program_brk: usize,
+        /// Task Info
+    pub task_time: TaskTime,
+}
+/// Task information
+#[derive(Clone, Copy)]
+pub struct TaskTime {
+    /// The numbers of syscall called by task
+    pub syscall_times: [u32; MAX_SYSCALL_NUM],
+    /// Total running time of task
+    pub start_time: usize,
+}
+
+impl TaskTime {
+    /// ...
+    pub fn new() -> Self {
+        Self {
+            syscall_times: [0; MAX_SYSCALL_NUM],
+            start_time: 0,
+        }
+    }
+
+    /// ...
+    pub fn add_syscall_time(&mut self, syscall_id: usize) {
+        self.syscall_times[syscall_id] += 1;
+    }
 }
 
 impl TaskControlBlock {
@@ -63,6 +88,7 @@ impl TaskControlBlock {
             base_size: user_sp,
             heap_bottom: user_sp,
             program_brk: user_sp,
+            task_time: TaskTime::new(),
         };
         // prepare TrapContext in user space
         let trap_cx = task_control_block.get_trap_cx();
@@ -95,6 +121,42 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+    /// mmap
+    pub fn sys_mmap(&mut self, _start: usize, _len: usize, _port: usize) -> isize {
+        let start_va = VirtAddr::from(_start);
+        let end_va = VirtAddr::from(_start + _len);
+        if start_va.page_offset()!= 0 || _port & !0x7 != 0 || _port & 0x7== 0 { 
+            return -1;
+        }
+        // [start, start + len) 中存在已经被映射的页
+        if self.memory_set.conflict_check(start_va, end_va) {
+            return -1;
+        }
+        let mut permission = MapPermission::U;
+        if _port & 0x1!= 0 {
+            permission |= MapPermission::R;
+        }
+        if _port & 0x2!= 0 {
+            permission |= MapPermission::W;
+        }
+        if _port & 0x4!= 0 {
+            permission |= MapPermission::X;
+        }
+        self.memory_set
+            .insert_framed_area(start_va, end_va, permission);
+        0
+    }
+
+    /// unmap
+    pub fn sys_unmap(&mut self, _start: usize, _len: usize) -> isize {
+        let start_va = VirtAddr::from(_start);
+        let end_va = VirtAddr::from(_start + _len);
+        if start_va.page_offset()!= 0 { 
+            return -1;
+        }
+        self.memory_set
+            .remove_area(start_va, end_va) 
     }
 }
 
