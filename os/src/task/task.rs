@@ -1,14 +1,14 @@
 //! Types related to task management & Functions for completely changing TCB
 use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
-use crate::config::TRAP_CONTEXT_BASE;
-use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+use crate::config::{MAX_SYSCALL_NUM,TRAP_CONTEXT_BASE};
+use crate::mm::{MapPermission,MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
 use crate::trap::{trap_handler, TrapContext};
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::cell::RefMut;
-
+use crate::timer::get_time_ms;
 /// Task control block structure
 ///
 /// Directly save the contents that will not change during running
@@ -68,6 +68,11 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+    /// start time
+    pub start_time: usize,
+    /// syscall times
+    pub syscall_times: [u32; MAX_SYSCALL_NUM],
+    
 }
 
 impl TaskControlBlockInner {
@@ -118,6 +123,8 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    start_time: get_time_ms(),
+                    syscall_times: [0; MAX_SYSCALL_NUM],
                 })
             },
         };
@@ -191,6 +198,8 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    start_time: get_time_ms(),
+                    syscall_times: [0; MAX_SYSCALL_NUM],
                 })
             },
         });
@@ -236,7 +245,51 @@ impl TaskControlBlock {
             None
         }
     }
+
+    /// mmap
+    pub fn mmap(&self, _start: usize, _len: usize, _port: usize) -> bool {
+        let start_va = VirtAddr::from(_start);
+        let end_va = VirtAddr::from(_start + _len);
+        if start_va.page_offset() != 0 || _port & !0x7 != 0 || _port & 0x7 == 0 {
+            return false;
+        }
+        // [start, start + len) 中存在已经被映射的页
+        if self
+            .inner_exclusive_access()
+            .memory_set
+            .check_conflict(start_va, end_va)
+        {
+            return false;
+        }
+        let mut permission = MapPermission::U;
+        if _port & 0x1 != 0 {
+            permission |= MapPermission::R;
+        }
+        if _port & 0x2 != 0 {
+            permission |= MapPermission::W;
+        }
+        if _port & 0x4 != 0 {
+            permission |= MapPermission::X;
+        }
+        self.inner_exclusive_access()
+            .memory_set
+            .insert_framed_area(start_va, end_va, permission);
+        true
+    }
+
+    /// unmap
+    pub fn unmap(&self, _start: usize, _len: usize) -> bool {
+        let start_va = VirtAddr::from(_start);
+        let end_va = VirtAddr::from(_start + _len);
+        if start_va.page_offset() != 0 {
+            return false;
+        }
+        self.inner_exclusive_access()
+            .memory_set
+            .remove_area(start_va, end_va)
+    }
 }
+
 
 #[derive(Copy, Clone, PartialEq)]
 /// task status: UnInit, Ready, Running, Exited
