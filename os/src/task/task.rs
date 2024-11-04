@@ -1,14 +1,15 @@
 //! Types related to task management & Functions for completely changing TCB
 use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
-use crate::config::{MAX_SYSCALL_NUM,TRAP_CONTEXT_BASE};
-use crate::mm::{MapPermission,MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+use crate::config::{MAX_SYSCALL_NUM, TRAP_CONTEXT_BASE};
+use crate::mm::{MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_ms;
 use crate::trap::{trap_handler, TrapContext};
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::cell::RefMut;
-use crate::timer::get_time_ms;
+
 /// Task control block structure
 ///
 /// Directly save the contents that will not change during running
@@ -68,11 +69,18 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    /// Schedule priority
+    pub priority: usize,
+
+    /// Program stride
+    pub stride: usize,
+
     /// start time
     pub start_time: usize,
+
     /// syscall times
     pub syscall_times: [u32; MAX_SYSCALL_NUM],
-    
 }
 
 impl TaskControlBlockInner {
@@ -125,6 +133,8 @@ impl TaskControlBlock {
                     program_brk: user_sp,
                     start_time: get_time_ms(),
                     syscall_times: [0; MAX_SYSCALL_NUM],
+                    stride: 0,
+                    priority: 2,
                 })
             },
         };
@@ -157,6 +167,8 @@ impl TaskControlBlock {
         inner.trap_cx_ppn = trap_cx_ppn;
         // initialize base_size
         inner.base_size = user_sp;
+        // set start time
+        inner.start_time = get_time_ms();
         // initialize trap_cx
         let trap_cx = inner.get_trap_cx();
         *trap_cx = TrapContext::app_init_context(
@@ -200,6 +212,8 @@ impl TaskControlBlock {
                     program_brk: parent_inner.program_brk,
                     start_time: get_time_ms(),
                     syscall_times: [0; MAX_SYSCALL_NUM],
+                    priority: 0,
+                    stride: 0,
                 })
             },
         });
@@ -289,7 +303,6 @@ impl TaskControlBlock {
             .remove_area(start_va, end_va)
     }
 }
-
 
 #[derive(Copy, Clone, PartialEq)]
 /// task status: UnInit, Ready, Running, Exited

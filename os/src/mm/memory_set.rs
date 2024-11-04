@@ -72,6 +72,7 @@ impl MemorySet {
             self.areas.remove(idx);
         }
     }
+
     ///...
     pub fn check_conflict(&self, start_va: VirtAddr, end_va: VirtAddr) -> bool {
         let s = start_va.floor();
@@ -100,7 +101,6 @@ impl MemorySet {
             false
         }
     }
-
 
 
     /// Add a new MapArea into this MemorySet.
